@@ -1,0 +1,30 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+**/*.so
+**/*.o
+
+# OpenPCDet
+output/
+tools/output/
+pcdet.egg-info/
+.pcdet_cache/
+
+# 数据与模型（按需调整路径）
+data/
+*.pth
+*.pt
+*.onnx
+*.ckpt
+
+# IDE
+.vscode/
+.idea/
