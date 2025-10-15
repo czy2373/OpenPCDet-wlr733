@@ -91,7 +91,7 @@ PY
 xvfb-run -a -s "-screen 0 1280x720x24" \
 python tools/demo_offscreen.py \
   --cfg_file tools/cfgs/kitti_models/pointpillar_wlr733.yaml \
-  --ckpt output/cfgs/kitti_models/pointpillar_wlr733/default/ckpt/checkpoint_epoch_80.pth \
+  --ckpt tools/output/cfgs/kitti_models/pointpillar_wlr733/default/ckpt/checkpoint_epoch_80.pth \
   --data_path data/wlr733/training/velodyne/000003.bin \
   --save_png tools/output/000003_bev.png \
   --set_cfgs MODEL.POST_PROCESSING.SCORE_THRESH 0.30 \
