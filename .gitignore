@@ -32,3 +32,7 @@ data/
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+*.tmp:Zone.Identifier
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
