@@ -28,3 +28,7 @@ data/
 # IDE
 .vscode/
 .idea/
+*.tmp:Zone.Identifier
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
