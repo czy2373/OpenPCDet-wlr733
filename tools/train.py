@@ -159,6 +159,15 @@ def main():
                     break
                 except:
                     ckpt_list = ckpt_list[:-1]
+    
+    # ------------------ APPLY FREEZE AFTER LOADING WEIGHTS ------------------
+    # 目的：先把 S1/ckpt 权重加载进来，再按 cfg.MODEL.FREEZE_MODE 冻结/解冻，避免“先冻结再加载”的混乱
+    if hasattr(model, 'apply_freeze'):
+        logger.info('[FREEZE] apply_freeze() after loading pretrained/ckpt')
+        model.apply_freeze()
+    else:
+        logger.info('[FREEZE] model has no apply_freeze(), skip')
+
 
     model.train()  # before wrap to DistributedDataParallel to support fixed some parameters
     if dist_train:

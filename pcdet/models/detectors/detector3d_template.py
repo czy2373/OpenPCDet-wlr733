@@ -358,16 +358,35 @@ class Detector3DTemplate(nn.Module):
             self.load_state_dict(state_dict)
         return state_dict, update_model_state
 
+    @staticmethod
+    def _need_skip_ckpt_key(key, ignore_patterns):
+        for pat in ignore_patterns:
+            if key == pat or key.startswith(pat):
+                return True
+        return False
+
     def load_params_from_file(self, filename, logger, to_cpu=False, pre_trained_path=None):
         if not os.path.isfile(filename):
             raise FileNotFoundError
 
         logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         loc_type = torch.device('cpu') if to_cpu else None
-        checkpoint = torch.load(filename, map_location=loc_type)
+        checkpoint = torch.load(filename, map_location=loc_type, weights_only=False)
         model_state_disk = checkpoint['model_state']
+
+        ignore_patterns = []
+        if hasattr(self, 'model_cfg') and self.model_cfg is not None:
+            ignore_patterns = list(getattr(self.model_cfg, 'CKPT_IGNORE_KEYS', []))
+        if len(ignore_patterns) > 0:
+            raw_num = len(model_state_disk)
+            skipped_keys = [k for k in model_state_disk.keys() if self._need_skip_ckpt_key(k, ignore_patterns)]
+            if len(skipped_keys) > 0:
+                model_state_disk = {k: v for k, v in model_state_disk.items() if not self._need_skip_ckpt_key(k, ignore_patterns)}
+                logger.info('==> CKPT_IGNORE_KEYS active, skipped %d/%d keys' % (len(skipped_keys), raw_num))
+                logger.info('==> Skipped keys (first 20): %s' % skipped_keys[:20])
+
         if not pre_trained_path is None:
-            pretrain_checkpoint = torch.load(pre_trained_path, map_location=loc_type)
+            pretrain_checkpoint = torch.load(pre_trained_path, map_location=loc_type, weights_only=False)
             pretrain_model_state_disk = pretrain_checkpoint['model_state']
             model_state_disk.update(pretrain_model_state_disk)
             
@@ -389,7 +408,7 @@ class Detector3DTemplate(nn.Module):
 
         logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         loc_type = torch.device('cpu') if to_cpu else None
-        checkpoint = torch.load(filename, map_location=loc_type)
+        checkpoint = torch.load(filename, map_location=loc_type, weights_only=False)
         epoch = checkpoint.get('epoch', -1)
         it = checkpoint.get('it', 0.0)
 
@@ -405,7 +424,7 @@ class Detector3DTemplate(nn.Module):
                 src_file, ext = filename[:-4], filename[-3:]
                 optimizer_filename = '%s_optim.%s' % (src_file, ext)
                 if os.path.exists(optimizer_filename):
-                    optimizer_ckpt = torch.load(optimizer_filename, map_location=loc_type)
+                    optimizer_ckpt = torch.load(optimizer_filename, map_location=loc_type, weights_only=False)
                     optimizer.load_state_dict(optimizer_ckpt['optimizer_state'])
 
         if 'version' in checkpoint:

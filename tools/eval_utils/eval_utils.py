@@ -56,6 +56,10 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
         progress_bar = tqdm.tqdm(total=len(dataloader), leave=True, desc='eval', dynamic_ncols=True)
     start_time = time.time()
     for i, batch_dict in enumerate(dataloader):
+        #新增的
+        # if i >= 20:
+        #     break
+
         load_data_to_gpu(batch_dict)
 
         if getattr(args, 'infer_time', False):

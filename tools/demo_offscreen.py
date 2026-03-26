@@ -6,6 +6,7 @@ import os
 import numpy as np
 import torch
 import open3d as o3d
+import gc; gc.collect()
 
 from pathlib import Path
 
@@ -113,21 +114,50 @@ def render_offscreen(points_xyzit, boxes_lidar, save_png, save_ply=None, width=1
             scene.add_geometry(f"bbox_{i}", ls, mat_ls)
 
     # camera
+    global FIXED_CENTER, FIXED_RADIUS
     aabb = pcd.get_axis_aligned_bounding_box()
-    center = aabb.get_center()
-    extent = aabb.get_extent()
-    radius = np.linalg.norm(extent) * 0.7 + 30.0
 
-    eye = center + np.array([0.0, 0.0, radius])   # 正上方
-    up  = np.array([1.0, 0.0, 0.0])               # 让 +X 朝上；想让 +Y 朝上就用 [0,1,0]
+    if 'FIXED_CENTER' not in globals():
+        FIXED_CENTER = aabb.get_center()
+        FIXED_RADIUS = np.linalg.norm(aabb.get_extent()) * 0.7 + 30.0
+
+    center = FIXED_CENTER
+    radius = FIXED_RADIUS
+    eye = center + np.array([0.0, 0.0, radius])
+    up  = np.array([1.0, 0.0, 0.0])
     scene.camera.look_at(center, eye, up)
+
 
     # 俯视可把 FoV 稍微收窄，画面更集中；保持 Vertical FOVType
     scene.camera.set_projection(35.0, width / height, 0.1, 1000.0, rendering.Camera.FovType.Vertical)
 
     img = renderer.render_to_image()
     o3d.io.write_image(save_png, img)
+
+    # ---- safe cleanup across Open3D versions / WSL EGL ----
+    try:
+        if hasattr(scene, "clear_geometry"):
+            scene.clear_geometry()
+    except Exception as e:
+        print("[WARN] scene.clear_geometry failed:", repr(e))
+
+    try:
+        # some versions don't have this
+        if hasattr(renderer, "release_resources"):
+            renderer.release_resources()
+    except Exception as e:
+        print("[WARN] renderer.release_resources failed:", repr(e))
+
+    try:
+        del renderer
+    except Exception:
+        pass
+
+    import gc
+    gc.collect()
+
     print(f"[Saved] {save_png}")
+
 
 
 def main():

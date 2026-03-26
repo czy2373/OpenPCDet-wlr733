@@ -1,20 +1,10 @@
 CLASS_NAMES: ['vehicle']
 MAP_CLASS_TO_KITTI:
-    vehicle: Car
+  vehicle: Car
+
 MODEL:
   NAME: PointPillar
-
-  USE_FUSION: False   # ←←← 就加这一行（关键）
-
-  FUSION:
-    ENABLED: True
-    IMG_OUT_CHANNELS: 64
-    IMG_DOWNSAMPLE: 4
-    Z0: -2.0
-    IMAGE_ROOT: '/root/pointpillar/cam_matched'
-    IMAGE_RESIZE_HW: [1080, 1920]
-    IMAGE_EXT: '.jpg'
-
+  USE_FUSION: False
   CLASS_NAMES: ['vehicle']
 
   VFE:
@@ -24,24 +14,8 @@ MODEL:
     USE_NORM: True
     NUM_FILTERS: [64]
 
-  IMAGE_BACKBONE:
-    NAME: ImageBackboneSimple
-    OUT_CH: 64
-
-  IMAGE_TO_BEV:
-    NAME: ImageToBEV
-    VOXEL_SIZE: [0.2, 0.2, 10]
-    Z0: -2.0
-    Z_LIST: []  
-
-  BEV_FUSION:
-    NAME: BEVFusion
-    C_LIDAR: 64
-    C_IMG: 64
-    C_OUT: 64
-
   MAP_TO_BEV:
-    NAME: PointPillarScatter 
+    NAME: PointPillarScatter
     NUM_BEV_FEATURES: 64
 
   BACKBONE_2D:
@@ -62,8 +36,8 @@ MODEL:
     ANCHOR_GENERATOR_CONFIG:
       - anchor_generator: anchor_generator_range
         class_name: vehicle
-        anchor_range: [-112, -106, -3, 100, 154, 1]
-        anchor_sizes: [[4.4, 2.0, 1.8]]  
+        anchor_range: [0, -40.0, -3.0, 99.2, 40.0, 1.0]
+        anchor_sizes: [[4.4, 2.0, 1.8]]
         anchor_rotations: [0, 1.57]
         anchor_bottom_heights: [-1.0]
         matched_threshold: 0.6
@@ -88,18 +62,19 @@ MODEL:
 
   POST_PROCESSING:
     RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
-    SCORE_THRESH: 0.30
+    SCORE_THRESH: 0.10
     OUTPUT_RAW_SCORE: False
     EVAL_METRIC: kitti
+
     NMS_CONFIG:
       MULTI_CLASSES_NMS: False
-      NMS_TYPE: nms_gpu 
+      NMS_TYPE: nms_gpu
       NMS_THRESH: 0.01
       NMS_PRE_MAXSIZE: 4096
       NMS_POST_MAXSIZE: 500
 
 DATA_CONFIG:
-  _BASE_CONFIG_: tools/cfgs/dataset_configs/wlr733_dataset_sync.yaml
+  _BASE_CONFIG_: tools/cfgs/dataset_configs/dair_i_dataset_aligned.yaml
 
 OPTIMIZATION:
   BATCH_SIZE_PER_GPU: 4

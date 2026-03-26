@@ -57,9 +57,13 @@ def parse_config():
 
 def eval_single_ckpt(model, test_loader, args, eval_output_dir, logger, epoch_id, dist_test=False):
     # load checkpoint
-    model.load_params_from_file(filename=args.ckpt, logger=logger, to_cpu=dist_test, 
+    use_cpu = dist_test or (not torch.cuda.is_available())
+    model.load_params_from_file(filename=args.ckpt, logger=logger, to_cpu=use_cpu,
                                 pre_trained_path=args.pretrained_model)
-    model.cuda()
+    if torch.cuda.is_available():
+        model.cuda()
+    else:
+        model.cpu()
     
     # start evaluation
     eval_utils.eval_one_epoch(
@@ -115,8 +119,12 @@ def repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger, ckpt_dir
         total_time = 0
         first_eval = False
 
-        model.load_params_from_file(filename=cur_ckpt, logger=logger, to_cpu=dist_test)
-        model.cuda()
+        use_cpu = dist_test or (not torch.cuda.is_available())
+        model.load_params_from_file(filename=cur_ckpt, logger=logger, to_cpu=use_cpu)
+        if torch.cuda.is_available():
+            model.cuda()
+        else:
+            model.cpu()
 
         # start evaluation
         cur_result_dir = eval_output_dir / ('epoch_%s' % cur_epoch_id) / cfg.DATA_CONFIG.DATA_SPLIT['test']

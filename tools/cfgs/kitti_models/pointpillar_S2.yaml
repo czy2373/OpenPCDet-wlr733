@@ -1,0 +1,205 @@
+CLASS_NAMES:
+- vehicle
+MAP_CLASS_TO_KITTI:
+  vehicle: Car
+MODEL:
+  NAME: PointPillar
+  USE_FUSION: true
+  FUSION:
+    ENABLED: true
+    IMG_OUT_CHANNELS: 64
+    IMG_DOWNSAMPLE: 4
+    Z0: -2.0
+    IMAGE_ROOT: /root/pointpillar/cam_matched
+    IMAGE_RESIZE_HW:
+    - 1080
+    - 1920
+    IMAGE_EXT: .jpg
+  CLASS_NAMES:
+  - vehicle
+  VFE:
+    NAME: PillarVFE
+    WITH_DISTANCE: false
+    USE_ABSLOTE_XYZ: true
+    USE_NORM: true
+    NUM_FILTERS:
+    - 64
+  IMAGE_BACKBONE:
+    NAME: ImageBackboneSimple
+    OUT_CH: 64
+    OUT_CHANNELS: 64
+    DOWNSAMPLE: 4
+  IMAGE_TO_BEV:
+    NAME: ImageToBEV
+    VOXEL_SIZE:
+    - 0.2
+    - 0.2
+    - 10
+    Z0: -2.0
+    Z_LIST:
+    - -3.0
+    - -2.5
+    - -2.0
+    POINT_CLOUD_RANGE:
+    - -112
+    - -106
+    - -12
+    - 99.2
+    - 158
+    - 2
+    IMG_DOWNSAMPLE: 4
+    BEV_DOWNSAMPLE: 4
+    DEBUG_SAVE: false
+  BEV_FUSION:
+    NAME: BEVFusion
+    C_LIDAR: 64
+    C_IMG: 64
+    C_OUT: 64
+    IMG_CHANNELS: 64
+    ALPHA_INIT: 0.02
+    GATE_TEMP: 1.0
+    GATE_BIAS_INIT: 2.0
+    DEBUG: true
+    USE_PROJ: true
+  ROI:
+    FUSION:
+      ENABLED: true
+      MODE: polygon
+      CORRIDOR:
+        K: 1.53
+        B: 18.5
+        X0: -80.0
+        X1: 90.0
+        HALF_LEFT: 12.0
+        HALF_RIGHT: 6.0
+      POLYGON:
+      - - 17.7
+        - 49.5
+      - - 30.9
+        - 42.1
+      - - -31.1
+        - -52.3
+      - - -47.3
+        - -42.5
+    TRACK:
+      ENABLED: true
+      MODE: polygon
+      CORRIDOR:
+        K: 1.53
+        B: 18.5
+        X0: -80.0
+        X1: 90.0
+        HALF_LEFT: 9.0
+        HALF_RIGHT: 3.5
+      POLYGON:
+      - - 11.1
+        - 38.5
+      - - 23.5
+        - 32.3
+      - - -20.3
+        - -35.7
+      - - -36.9
+        - -29.5
+  MAP_TO_BEV:
+    NAME: PointPillarScatter
+    NUM_BEV_FEATURES: 64
+  BACKBONE_2D:
+    NAME: BaseBEVBackbone
+    LAYER_NUMS:
+    - 3
+    - 5
+    - 5
+    LAYER_STRIDES:
+    - 2
+    - 2
+    - 2
+    NUM_FILTERS:
+    - 64
+    - 128
+    - 256
+    UPSAMPLE_STRIDES:
+    - 1
+    - 2
+    - 4
+    NUM_UPSAMPLE_FILTERS:
+    - 128
+    - 128
+    - 128
+  DENSE_HEAD:
+    NAME: AnchorHeadSingle
+    CLASS_AGNOSTIC: false
+    USE_DIRECTION_CLASSIFIER: true
+    DIR_OFFSET: 0.78539
+    DIR_LIMIT_OFFSET: 0.0
+    NUM_DIR_BINS: 2
+    ANCHOR_GENERATOR_CONFIG:
+    - class_name: vehicle
+      anchor_sizes:
+      - - 4.4
+        - 2.0
+        - 1.8
+      anchor_rotations:
+      - 0
+      - 1.57
+      anchor_bottom_heights:
+      - -1.0
+      align_center: false
+      feature_map_stride: 2
+      matched_threshold: 0.6
+      unmatched_threshold: 0.45
+    TARGET_ASSIGNER_CONFIG:
+      NAME: AxisAlignedTargetAssigner
+      POS_FRACTION: -1.0
+      SAMPLE_SIZE: 512
+      NORM_BY_NUM_EXAMPLES: false
+      MATCH_HEIGHT: false
+      BOX_CODER: ResidualCoder
+    LOSS_CONFIG:
+      LOSS_WEIGHTS:
+        cls_weight: 1.0
+        loc_weight: 2.0
+        dir_weight: 0.2
+        code_weights:
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+  POST_PROCESSING:
+    RECALL_THRESH_LIST:
+    - 0.3
+    - 0.5
+    - 0.7
+    SCORE_THRESH: 0.1
+    OUTPUT_RAW_SCORE: false
+    EVAL_METRIC: kitti
+    NMS_CONFIG:
+      MULTI_CLASSES_NMS: false
+      NMS_TYPE: nms_gpu
+      NMS_THRESH: 0.01
+      NMS_PRE_MAXSIZE: 4096
+      NMS_POST_MAXSIZE: 500
+  FREEZE_MODE: stage2_head_only
+DATA_CONFIG:
+  _BASE_CONFIG_: tools/cfgs/dataset_configs/wlr733_dataset_sync.yaml
+OPTIMIZATION:
+  BATCH_SIZE_PER_GPU: 4
+  NUM_EPOCHS: 80
+  OPTIMIZER: adam_onecycle
+  LR: 0.003
+  WEIGHT_DECAY: 0.01
+  MOMENTUM: 0.9
+  MOMS:
+  - 0.95
+  - 0.85
+  PCT_START: 0.4
+  DIV_FACTOR: 10
+  DECAY_STEP_LIST:
+  - 35
+  - 45
+  LR_CLIP: 1.0e-07
+  LR_DECAY: 0.1
+  LR_WARMUP: false
+  GRAD_NORM_CLIP: 10

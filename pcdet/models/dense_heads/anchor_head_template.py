@@ -28,7 +28,8 @@ class AnchorHeadTemplate(nn.Module):
             anchor_generator_cfg, grid_size=grid_size, point_cloud_range=point_cloud_range,
             anchor_ndim=self.box_coder.code_size
         )
-        self.anchors = [x.cuda() for x in anchors]
+        anchor_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.anchors = [x.to(anchor_device) for x in anchors]
         self.target_assigner = self.get_target_assigner(anchor_target_cfg)
 
         self.forward_ret_dict = {}

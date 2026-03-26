@@ -1,9 +1,9 @@
-CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']
+CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']              # 对应输出的类别数量 num_class，影响网络最后一层输出通道数。
 
-DATA_CONFIG: 
+DATA_CONFIG:    # <--- 这里定义了数据预处理步骤
     _BASE_CONFIG_: cfgs/dataset_configs/kitti_dataset.yaml
     POINT_CLOUD_RANGE: [0, -39.68, -3, 69.12, 39.68, 1]
-    DATA_PROCESSOR:
+    DATA_PROCESSOR:                                        # 点云体素化、坐标裁剪等操作
         - NAME: mask_points_and_boxes_outside_range
           REMOVE_OUTSIDE_BOXES: True
 
@@ -13,14 +13,14 @@ DATA_CONFIG:
             'test': False
           }
 
-        - NAME: transform_points_to_voxels
-          VOXEL_SIZE: [0.16, 0.16, 4]
-          MAX_POINTS_PER_VOXEL: 32
+        - NAME: transform_points_to_voxels      # 关键！这是Pillar化的地方！
+          VOXEL_SIZE: [0.16, 0.16, 4]    # Pillar的xy尺寸和z尺寸
+          MAX_POINTS_PER_VOXEL: 32       # 每个Pillar最多有多少点
           MAX_NUMBER_OF_VOXELS: {
             'train': 16000,
             'test': 40000
           }
-    DATA_AUGMENTOR:
+    DATA_AUGMENTOR:                                        # 数据增强（旋转、平移、翻转、噪声）
         DISABLE_AUG_LIST: ['placeholder']
         AUG_CONFIG_LIST:
             - NAME: gt_sampling
@@ -39,55 +39,57 @@ DATA_CONFIG:
               LIMIT_WHOLE_SCENE: False
 
             - NAME: random_world_flip
-              ALONG_AXIS_LIST: ['x']
+              ALONG_AXIS_LIST: ['x']  # 沿 x 轴翻转
 
             - NAME: random_world_rotation
-              WORLD_ROT_ANGLE: [-0.78539816, 0.78539816]
+              WORLD_ROT_ANGLE: [-0.78539816, 0.78539816]  # 随机全局旋转（-45°~+45°）
 
             - NAME: random_world_scaling
-              WORLD_SCALE_RANGE: [0.95, 1.05]
+              WORLD_SCALE_RANGE: [0.95, 1.05]  # 全局缩放
 
-MODEL:
+MODEL:                                                  # 定义整个模型结构，包括输入模块（VFE）、特征映射、骨干网络（Backbone）和检测头（Head）。
     NAME: PointPillar
 
-    VFE:
+    VFE: # 作用：将每个体素（pillar）中点云特征编码为一个固定维度的向量（常用 64）。
         NAME: PillarVFE
         WITH_DISTANCE: False
         USE_ABSLOTE_XYZ: True
-        USE_NORM: True
+        USE_NORM: True   # 若点很稀、噪声大，USE_NORM 保持 True 有助稳定
         NUM_FILTERS: [64]
 
-    MAP_TO_BEV:
+        
+    MAP_TO_BEV:  # 作用：将 VFE 输出的柱状特征映射成 2D BEV（Bird’s Eye View）特征图，为后续卷积网络输入。
         NAME: PointPillarScatter
-        NUM_BEV_FEATURES: 64
+        NUM_BEV_FEATURES: 64   # 通道数
 
-    BACKBONE_2D:
+
+    BACKBONE_2D:  # 作用：2D 卷积特征提取网络（类似 ResNet）。
         NAME: BaseBEVBackbone
-        LAYER_NUMS: [3, 5, 5]
-        LAYER_STRIDES: [2, 2, 2]
-        NUM_FILTERS: [64, 128, 256]
-        UPSAMPLE_STRIDES: [1, 2, 4]
-        NUM_UPSAMPLE_FILTERS: [128, 128, 128]
+        LAYER_NUMS: [3, 5, 5]    # 每个 stage 里额外 3×3 卷积的次数
+        LAYER_STRIDES: [2, 2, 2]  # 该 stage 的**首层 stride**（下采样倍率）
+        NUM_FILTERS: [64, 128, 256]  # 该 stage 的**输出通道数**
+        UPSAMPLE_STRIDES: [1, 2, 4]  # 每个分支的上采样倍率（常用作转置卷积的 stride）
+        NUM_UPSAMPLE_FILTERS: [128, 128, 128]  # 分支输出通道
 
-    DENSE_HEAD:
-        NAME: AnchorHeadSingle
-        CLASS_AGNOSTIC: False
+    DENSE_HEAD: # 作用：根据特征图生成检测框
+        NAME: AnchorHeadSingle  # 这是头部网络的名称，可能指明了这个头部的类型或特征。
+        CLASS_AGNOSTIC: False  # 这表示头部网络不是“类别不可知”的，也就是说，它在处理不同类别的目标时会考虑类别信息。
 
-        USE_DIRECTION_CLASSIFIER: True
-        DIR_OFFSET: 0.78539
+        USE_DIRECTION_CLASSIFIER: True  # 这指示网络是否使用方向分类器来预测目标的朝向。
+        DIR_OFFSET: 0.78539  
         DIR_LIMIT_OFFSET: 0.0
-        NUM_DIR_BINS: 2
+        NUM_DIR_BINS: 2  # 意思是它要做一个二分类（Bin 1: 正向, Bin 2: 反向）
 
-        ANCHOR_GENERATOR_CONFIG: [
+        ANCHOR_GENERATOR_CONFIG: [     # 定义每类 anchor 的尺寸和高度范围
             {
                 'class_name': 'Car',
-                'anchor_sizes': [[3.9, 1.6, 1.56]],
-                'anchor_rotations': [0, 1.57],
-                'anchor_bottom_heights': [-1.78],
+                'anchor_sizes': [[3.9, 1.6, 1.56]],  # 每类的平均尺寸 [dx, dy, dz]（米）
+                'anchor_rotations': [0, 1.57],  # 面向 0° 与 90°
+                'anchor_bottom_heights': [-1.78],  # 框底相对地面的 z 偏置
                 'align_center': False,
-                'feature_map_stride': 2,
+                'feature_map_stride': 2,  # 放置 anchor 的 BEV 下采样步长（与 backbone 对齐）
                 'matched_threshold': 0.6,
-                'unmatched_threshold': 0.45
+                'unmatched_threshold': 0.45  # 正负样本 IoU 阈值
             },
             {
                 'class_name': 'Pedestrian',
@@ -99,18 +101,7 @@ MODEL:
                 'matched_threshold': 0.5,
                 'unmatched_threshold': 0.35
             },
-            {
-                'class_name': 'Cyclist',
-                'anchor_sizes': [[1.76, 0.6, 1.73]],
-                'anchor_rotations': [0, 1.57],
-                'anchor_bottom_heights': [-0.6],
-                'align_center': False,
-                'feature_map_stride': 2,
-                'matched_threshold': 0.5,
-                'unmatched_threshold': 0.35
-            }
-        ]
-
+            
         TARGET_ASSIGNER_CONFIG:
             NAME: AxisAlignedTargetAssigner
             POS_FRACTION: -1.0
@@ -121,33 +112,37 @@ MODEL:
 
         LOSS_CONFIG:
             LOSS_WEIGHTS: {
-                'cls_weight': 1.0,
+                'cls_weight': 1.0,0
                 'loc_weight': 2.0,
                 'dir_weight': 0.2,
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
             }
 
-    POST_PROCESSING:
-        RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
-        SCORE_THRESH: 0.1
-        OUTPUT_RAW_SCORE: False
+    POST_PROCESSING:  # 作用：模型推理后处理，例如分数阈值和 NMS（非极大值抑制）。
+        RECALL_THRESH_LIST: [0.3, 0.5, 0.7]  
+        #分别代表 [‘Car’, ‘Pedestrian’, ‘Cyclist’] 这是一个召回阈值列表，
+        #用于评估检测结果的召回率。在评估过程中，将计算不同召回阈值下的召回率，并输出相应的指标。
+
+        SCORE_THRESH: 0.1 #这是一个得分阈值，用于过滤检测结果。只有得分高于该阈值的检测结果才会被保留，低于阈值的结果将被丢弃。
+        OUTPUT_RAW_SCORE: False #如果设置为True，则在输出结果中将包含原始得分；如果设置为False，则只输出二值化的检测结果。
 
         EVAL_METRIC: kitti
+        #这是一个评估指标的选择，用于衡量检测结果的性能。
+        #在这种情况下，选择了Kitti评估指标，该指标通常用于衡量目标检测在Kitti数据集上的性能。
 
-        NMS_CONFIG:
-            MULTI_CLASSES_NMS: False
-            NMS_TYPE: nms_gpu
-            NMS_THRESH: 0.01
-            NMS_PRE_MAXSIZE: 4096
-            NMS_POST_MAXSIZE: 500
+        NMS_CONFIG:  #这是一个配置NMS（非极大值抑制）的子模块，用于在检测结果中进行框的合并和过滤。
+            MULTI_CLASSES_NMS: False   #用于指定是否对多类别进行NMS
+            NMS_TYPE: nms_gpu   #这是NMS算法的选择
+            NMS_THRESH: 0.01  #这是NMS的阈值，用于控制重叠度的判定。当两个框的重叠度高于该阈值时，较低得分的框将被抑制。
+            NMS_PRE_MAXSIZE: 4096  #这是NMS操作之前，每个类别最大保留的检测框数量。如果超过该数量，将根据得分进行排序并截断。
+            NMS_POST_MAXSIZE: 500  #这是NMS操作之后，每个类别最大保留的检测框数量。如果超过该数量，将根据得分进行排序并截断。
 
-
-OPTIMIZATION:
-    BATCH_SIZE_PER_GPU: 4
-    NUM_EPOCHS: 80
+OPTIMIZATION: # 控制训练时的超参数
+    BATCH_SIZE_PER_GPU: 4   # 每个 GPU 的 batch 大小
+    NUM_EPOCHS: 80  # 训练轮次
 
     OPTIMIZER: adam_onecycle
-    LR: 0.003
+    LR: 0.003  # 学习率
     WEIGHT_DECAY: 0.01
     MOMENTUM: 0.9
 

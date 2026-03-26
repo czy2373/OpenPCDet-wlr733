@@ -1,0 +1,36 @@
+_BASE_CONFIG_: tools/cfgs/kitti_models/pointpillar_S2.yaml
+
+MODEL:
+  CKPT_IGNORE_KEYS:
+    - bev_fusion.alpha
+  BEV_FUSION:
+    ALPHA_INIT: 0.05
+    GATE_TEMP: 1.2
+    DEBUG: true
+    ALPHA_TARGET_MIN: 0.03
+    ALPHA_REG_W: 0.5
+  CALIB_REFINE:
+    ENABLE: false
+    DETACH_IMG_FEAT: false
+  FREEZE_MODE: none
+  POST_PROCESSING:
+    SCORE_THRESH: 0.05
+  IMAGE_LED:
+    ENABLED: true
+    YOLO_CSV: /root/autodl_wlr_dt_refine_pack_20260316/fusion/output/calib_refine_2dbox/yolo_det_debug200_rawcams_overlap_y8m.csv
+    FRAME_MAP_CSV: /root/pointpillar/wlr_sync_assets_v1/cam_lidar_match_canonical.csv
+    USE_FRAME_MAP: true
+    YOLO_CLASSES: [2, 5, 7]
+    MATCH_IOU_THRESH: 0.05
+    MATCH_CENTER_DIST_THRESH: 0.35
+    RAW_SCORE_THRESH: 0.25
+    FINAL_SCORE_THRESH: 0.25
+    NEAR_RANGE_M: 60.0
+    DEBUG: true
+
+DATA_CONFIG:
+  _BASE_CONFIG_: tools/cfgs/dataset_configs/wlr733_dataset_sync.yaml
+
+OPTIMIZATION:
+  LR: 0.001
+  NUM_EPOCHS: 15

@@ -8,6 +8,7 @@ class BaseBEVBackbone(nn.Module):
         super().__init__()
         self.model_cfg = model_cfg
 
+        # 检查和解析模型配置中的卷积层数量、步幅、滤波器数量等参数
         if self.model_cfg.get('LAYER_NUMS', None) is not None:
             assert len(self.model_cfg.LAYER_NUMS) == len(self.model_cfg.LAYER_STRIDES) == len(self.model_cfg.NUM_FILTERS)
             layer_nums = self.model_cfg.LAYER_NUMS
@@ -15,6 +16,8 @@ class BaseBEVBackbone(nn.Module):
             num_filters = self.model_cfg.NUM_FILTERS
         else:
             layer_nums = layer_strides = num_filters = []
+        # 在这部分代码中，检查了模型配置中是否有关于卷积层数量 (LAYER_NUMS)、步幅 (LAYER_STRIDES) 和滤波器数量 (NUM_FILTERS) 的定义。
+        # 如果这些配置存在，就获取它们的值并确保它们的长度一致；否则，将这些参数设为空列表。
 
         if self.model_cfg.get('UPSAMPLE_STRIDES', None) is not None:
             assert len(self.model_cfg.UPSAMPLE_STRIDES) == len(self.model_cfg.NUM_UPSAMPLE_FILTERS)
@@ -22,11 +25,16 @@ class BaseBEVBackbone(nn.Module):
             upsample_strides = self.model_cfg.UPSAMPLE_STRIDES
         else:
             upsample_strides = num_upsample_filters = []
+        # 这段代码检查模型配置中是否有定义关于上采样步幅 (UPSAMPLE_STRIDES) 和上采样滤波器数量 (NUM_UPSAMPLE_FILTERS) 的参数，
+        # 如果有则获取其值并确保长度一致；否则将这些参数设为空列表。
 
+        # 计算卷积层数量
         num_levels = len(layer_nums)
-        c_in_list = [input_channels, *num_filters[:-1]]
+        c_in_list = [input_channels, *num_filters[:-1]] #初始化一个 c_in_list 列表，其中包含输入通道数和各个卷积层的滤波器数量（除了最后一层）。
         self.blocks = nn.ModuleList()
         self.deblocks = nn.ModuleList()
+        # 在 for 循环中，对于每个卷积层（level），生成了一系列卷积相关的层次结构，
+        # 包括零填充 (ZeroPad2d)、卷积 (Conv2d)、批归一化 (BatchNorm2d) 和 ReLU 激活函数。
         for idx in range(num_levels):
             cur_layers = [
                 nn.ZeroPad2d(1),
@@ -44,6 +52,8 @@ class BaseBEVBackbone(nn.Module):
                     nn.ReLU()
                 ])
             self.blocks.append(nn.Sequential(*cur_layers))
+
+
             if len(upsample_strides) > 0:
                 stride = upsample_strides[idx]
                 if stride > 1 or (stride == 1 and not self.model_cfg.get('USE_CONV_FOR_NO_STRIDE', False)):

@@ -102,7 +102,7 @@ python tools/demo_offscreen.py \
 ```bash
 python tools/test.py \
   --cfg_file tools/cfgs/kitti_models/pointpillar_wlr733.yaml \
-  --ckpt output/cfgs/kitti_models/pointpillar_wlr733/default/ckpt/checkpoint_epoch_80.pth \
+  --ckpt tools/output/cfgs/kitti_models/pointpillar_wlr733/default/ckpt/checkpoint_epoch_80.pth \
   --eval
 ```
 

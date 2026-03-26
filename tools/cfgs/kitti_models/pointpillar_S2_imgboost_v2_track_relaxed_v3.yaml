@@ -1,0 +1,39 @@
+_BASE_CONFIG_: tools/cfgs/kitti_models/pointpillar_S2.yaml
+
+MODEL:
+  CKPT_IGNORE_KEYS:
+    - bev_fusion.alpha
+  BEV_FUSION:
+    ALPHA_INIT: 0.05
+    GATE_TEMP: 1.2
+    DEBUG: true
+    ALPHA_TARGET_MIN: 0.03
+    ALPHA_REG_W: 0.5
+  CALIB_REFINE:
+    ENABLE: false
+    DETACH_IMG_FEAT: false
+  FREEZE_MODE: none
+  ROI:
+    TRACK:
+      ENABLED: true
+      MODE: polygon
+      POLYGON:
+        - [44.6, 112.7]
+        - [81.8, 112.0]
+        - [-49.6, -109.9]
+        - [-99.4, -91.3]
+  POST_PROCESSING:
+    SCORE_THRESH: 0.25
+
+DATA_CONFIG:
+  _BASE_CONFIG_: tools/cfgs/dataset_configs/wlr733_dataset_sync.yaml
+  DATA_SPLIT:
+    train: train_sync
+    test: val_mid20
+  INFO_PATH:
+    train: ['data/wlr733/wlr733_infos_train_sync.pkl']
+    test: ['data/wlr733/wlr733_infos_val_mid20.pkl']
+
+OPTIMIZATION:
+  LR: 0.001
+  NUM_EPOCHS: 15

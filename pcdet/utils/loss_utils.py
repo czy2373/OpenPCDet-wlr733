@@ -7,6 +7,10 @@ from . import box_utils
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 
 
+def _default_device():
+    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
 class SigmoidFocalClassificationLoss(nn.Module):
     """
     Sigmoid focal cross entropy loss.
@@ -95,7 +99,9 @@ class WeightedSmoothL1Loss(nn.Module):
         self.beta = beta
         if code_weights is not None:
             self.code_weights = np.array(code_weights, dtype=np.float32)
-            self.code_weights = torch.from_numpy(self.code_weights).cuda()
+            self.code_weights = torch.from_numpy(self.code_weights).to(_default_device())
+        else:
+            self.code_weights = None
 
     @staticmethod
     def smooth_l1_loss(diff, beta):
@@ -147,7 +153,9 @@ class WeightedL1Loss(nn.Module):
         super(WeightedL1Loss, self).__init__()
         if code_weights is not None:
             self.code_weights = np.array(code_weights, dtype=np.float32)
-            self.code_weights = torch.from_numpy(self.code_weights).cuda()
+            self.code_weights = torch.from_numpy(self.code_weights).to(_default_device())
+        else:
+            self.code_weights = None
 
     @torch.cuda.amp.custom_fwd(cast_inputs=torch.float16)
     def forward(self, input: torch.Tensor, target: torch.Tensor, weights: torch.Tensor = None):

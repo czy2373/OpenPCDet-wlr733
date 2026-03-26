@@ -9,6 +9,39 @@ from ...utils import common_utils
 from . import iou3d_nms_cuda
 
 
+def _boxes_bev_overlap_from_iou(boxes_a, boxes_b, iou_bev):
+    area_a = (boxes_a[:, 3] * boxes_a[:, 4]).view(-1, 1)
+    area_b = (boxes_b[:, 3] * boxes_b[:, 4]).view(1, -1)
+    return iou_bev * (area_a + area_b) / torch.clamp(1.0 + iou_bev, min=1e-6)
+
+
+def _cpu_bev_nms(boxes, scores, thresh, pre_maxsize=None):
+    order = scores.sort(0, descending=True)[1]
+    if pre_maxsize is not None:
+        order = order[:pre_maxsize]
+
+    boxes_ordered = boxes[order]
+    keep_local = []
+    remaining = torch.arange(boxes_ordered.shape[0], dtype=torch.long)
+
+    while remaining.numel() > 0:
+        cur = remaining[0]
+        keep_local.append(int(cur.item()))
+        if remaining.numel() == 1:
+            break
+
+        cur_box = boxes_ordered[cur:cur + 1].cpu()
+        other_boxes = boxes_ordered[remaining[1:]].cpu()
+        ious = boxes_bev_iou_cpu(cur_box, other_boxes)
+        if not torch.is_tensor(ious):
+            ious = torch.from_numpy(ious)
+        keep_mask = ious.view(-1) <= thresh
+        remaining = remaining[1:][keep_mask]
+
+    keep_local = torch.as_tensor(keep_local, dtype=torch.long, device=order.device)
+    return order[keep_local].contiguous(), None
+
+
 def boxes_bev_iou_cpu(boxes_a, boxes_b):
     """
     Args:
@@ -38,6 +71,11 @@ def boxes_iou_bev(boxes_a, boxes_b):
         ans_iou: (N, M)
     """
     assert boxes_a.shape[1] == boxes_b.shape[1] == 7
+    if (not torch.cuda.is_available()) or (not boxes_a.is_cuda) or (not boxes_b.is_cuda):
+        ans_iou = boxes_bev_iou_cpu(boxes_a.detach().cpu(), boxes_b.detach().cpu())
+        if not torch.is_tensor(ans_iou):
+            ans_iou = torch.from_numpy(ans_iou)
+        return ans_iou.to(device=boxes_a.device, dtype=boxes_a.dtype)
     ans_iou = torch.cuda.FloatTensor(torch.Size((boxes_a.shape[0], boxes_b.shape[0]))).zero_()
 
     iou3d_nms_cuda.boxes_iou_bev_gpu(boxes_a.contiguous(), boxes_b.contiguous(), ans_iou)
@@ -55,6 +93,36 @@ def boxes_iou3d_gpu(boxes_a, boxes_b):
         ans_iou: (N, M)
     """
     assert boxes_a.shape[1] == boxes_b.shape[1] == 7
+    N = boxes_a.shape[0]
+    M = boxes_b.shape[0]
+
+    if (not torch.cuda.is_available()) or (not boxes_a.is_cuda) or (not boxes_b.is_cuda):
+        if N == 0 or M == 0:
+            return boxes_a.new_zeros((N, M))
+
+        bev_iou = boxes_bev_iou_cpu(boxes_a.detach().cpu(), boxes_b.detach().cpu())
+        if not torch.is_tensor(bev_iou):
+            bev_iou = torch.from_numpy(bev_iou)
+        bev_iou = bev_iou.to(device=boxes_a.device, dtype=boxes_a.dtype)
+        overlaps_bev = _boxes_bev_overlap_from_iou(boxes_a, boxes_b, bev_iou)
+
+        boxes_a_height_max = (boxes_a[:, 2] + boxes_a[:, 5] / 2).view(-1, 1)
+        boxes_a_height_min = (boxes_a[:, 2] - boxes_a[:, 5] / 2).view(-1, 1)
+        boxes_b_height_max = (boxes_b[:, 2] + boxes_b[:, 5] / 2).view(1, -1)
+        boxes_b_height_min = (boxes_b[:, 2] - boxes_b[:, 5] / 2).view(1, -1)
+
+        max_of_min = torch.max(boxes_a_height_min, boxes_b_height_min)
+        min_of_max = torch.min(boxes_a_height_max, boxes_b_height_max)
+        overlaps_h = torch.clamp(min_of_max - max_of_min, min=0)
+        overlaps_3d = overlaps_bev * overlaps_h
+
+        vol_a = (boxes_a[:, 3] * boxes_a[:, 4] * boxes_a[:, 5]).view(-1, 1)
+        vol_b = (boxes_b[:, 3] * boxes_b[:, 4] * boxes_b[:, 5]).view(1, -1)
+        return overlaps_3d / torch.clamp(vol_a + vol_b - overlaps_3d, min=1e-6)
+
+    # ---- 关键：空输入直接返回，避免 CUDA kernel launch grid=0 ----
+    if N == 0 or M == 0:
+        return boxes_a.new_zeros((N, M))    
 
     # height overlap
     boxes_a_height_max = (boxes_a[:, 2] + boxes_a[:, 5] / 2).view(-1, 1)
@@ -63,7 +131,7 @@ def boxes_iou3d_gpu(boxes_a, boxes_b):
     boxes_b_height_min = (boxes_b[:, 2] - boxes_b[:, 5] / 2).view(1, -1)
 
     # bev overlap
-    overlaps_bev = torch.cuda.FloatTensor(torch.Size((boxes_a.shape[0], boxes_b.shape[0]))).zero_()  # (N, M)
+    overlaps_bev = boxes_a.new_zeros((boxes_a.shape[0], boxes_b.shape[0]))
     iou3d_nms_cuda.boxes_overlap_bev_gpu(boxes_a.contiguous(), boxes_b.contiguous(), overlaps_bev)
 
     max_of_min = torch.max(boxes_a_height_min, boxes_b_height_min)
@@ -91,6 +159,9 @@ def boxes_aligned_iou3d_gpu(boxes_a, boxes_b):
     """
     assert boxes_a.shape[0] == boxes_b.shape[0]
     assert boxes_a.shape[1] == boxes_b.shape[1] == 7
+
+    if (not torch.cuda.is_available()) or (not boxes_a.is_cuda) or (not boxes_b.is_cuda):
+        return boxes_iou3d_gpu(boxes_a, boxes_b).diag().view(-1, 1)
 
     # height overlap
     boxes_a_height_max = (boxes_a[:, 2] + boxes_a[:, 5] / 2).view(-1, 1)
@@ -125,6 +196,8 @@ def nms_gpu(boxes, scores, thresh, pre_maxsize=None, **kwargs):
     :return:
     """
     assert boxes.shape[1] == 7
+    if (not torch.cuda.is_available()) or (not boxes.is_cuda) or (not scores.is_cuda):
+        return _cpu_bev_nms(boxes, scores, thresh, pre_maxsize=pre_maxsize)
     order = scores.sort(0, descending=True)[1]
     if pre_maxsize is not None:
         order = order[:pre_maxsize]
@@ -143,6 +216,8 @@ def nms_normal_gpu(boxes, scores, thresh, **kwargs):
     :return:
     """
     assert boxes.shape[1] == 7
+    if (not torch.cuda.is_available()) or (not boxes.is_cuda) or (not scores.is_cuda):
+        return _cpu_bev_nms(boxes, scores, thresh)
     order = scores.sort(0, descending=True)[1]
 
     boxes = boxes[order].contiguous()
@@ -163,6 +238,9 @@ def paired_boxes_iou3d_gpu(boxes_a, boxes_b):
     """
     assert boxes_a.shape[0] == boxes_b.shape[0]
     assert boxes_a.shape[1] == boxes_b.shape[1] == 7
+
+    if (not torch.cuda.is_available()) or (not boxes_a.is_cuda) or (not boxes_b.is_cuda):
+        return boxes_iou3d_gpu(boxes_a, boxes_b).diag()
 
     # height overlap
     boxes_a_height_max = (boxes_a[:, 2] + boxes_a[:, 5] / 2).view(-1, 1)

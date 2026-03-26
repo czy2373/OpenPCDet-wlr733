@@ -1,21 +1,13 @@
 CLASS_NAMES: ['vehicle']
 MAP_CLASS_TO_KITTI:
-    vehicle: Car
+  vehicle: Car
+
 MODEL:
   NAME: PointPillar
-
-  USE_FUSION: False   # ←←← 就加这一行（关键）
-
-  FUSION:
-    ENABLED: True
-    IMG_OUT_CHANNELS: 64
-    IMG_DOWNSAMPLE: 4
-    Z0: -2.0
-    IMAGE_ROOT: '/root/pointpillar/cam_matched'
-    IMAGE_RESIZE_HW: [1080, 1920]
-    IMAGE_EXT: '.jpg'
-
+  USE_FUSION: True
   CLASS_NAMES: ['vehicle']
+  CKPT_IGNORE_KEYS:
+    - bev_fusion.alpha
 
   VFE:
     NAME: PillarVFE
@@ -27,21 +19,44 @@ MODEL:
   IMAGE_BACKBONE:
     NAME: ImageBackboneSimple
     OUT_CH: 64
+    OUT_CHANNELS: 64
+    DOWNSAMPLE: 4
 
   IMAGE_TO_BEV:
     NAME: ImageToBEV
-    VOXEL_SIZE: [0.2, 0.2, 10]
+    VOXEL_SIZE: [0.2, 0.2, 4]
     Z0: -2.0
-    Z_LIST: []  
+    Z_LIST: [-3.0, -2.5, -2.0]
+    POINT_CLOUD_RANGE: [0, -40.0, -3.0, 99.2, 40.0, 1.0]
+    IMG_DOWNSAMPLE: 4
+    BEV_DOWNSAMPLE: 4
+    DEBUG_SAVE: False
 
   BEV_FUSION:
     NAME: BEVFusion
     C_LIDAR: 64
     C_IMG: 64
     C_OUT: 64
+    IMG_CHANNELS: 64
+    ALPHA_INIT: 0.05
+    GATE_TEMP: 1.0
+    GATE_BIAS_INIT: 0.5
+    DEBUG: True
+    USE_PROJ: True
+    USE_ALPHA_MAP: True
+    ALPHA_MAP_HIDDEN: 16
+    ALPHA_TARGET_MIN: 0.03
+    ALPHA_REG_W: 0.5
+
+  # DAIR validation should not inherit WLR-only ROI assumptions.
+  ROI:
+    FUSION:
+      ENABLED: False
+    TRACK:
+      ENABLED: False
 
   MAP_TO_BEV:
-    NAME: PointPillarScatter 
+    NAME: PointPillarScatter
     NUM_BEV_FEATURES: 64
 
   BACKBONE_2D:
@@ -62,8 +77,8 @@ MODEL:
     ANCHOR_GENERATOR_CONFIG:
       - anchor_generator: anchor_generator_range
         class_name: vehicle
-        anchor_range: [-112, -106, -3, 100, 154, 1]
-        anchor_sizes: [[4.4, 2.0, 1.8]]  
+        anchor_range: [0, -40.0, -3.0, 99.2, 40.0, 1.0]
+        anchor_sizes: [[4.4, 2.0, 1.8]]
         anchor_rotations: [0, 1.57]
         anchor_bottom_heights: [-1.0]
         matched_threshold: 0.6
@@ -88,18 +103,21 @@ MODEL:
 
   POST_PROCESSING:
     RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
-    SCORE_THRESH: 0.30
+    SCORE_THRESH: 0.10
     OUTPUT_RAW_SCORE: False
     EVAL_METRIC: kitti
+
     NMS_CONFIG:
       MULTI_CLASSES_NMS: False
-      NMS_TYPE: nms_gpu 
+      NMS_TYPE: nms_gpu
       NMS_THRESH: 0.01
       NMS_PRE_MAXSIZE: 4096
       NMS_POST_MAXSIZE: 500
 
+  FREEZE_MODE: none
+
 DATA_CONFIG:
-  _BASE_CONFIG_: tools/cfgs/dataset_configs/wlr733_dataset_sync.yaml
+  _BASE_CONFIG_: tools/cfgs/dataset_configs/dair_i_dataset_aligned.yaml
 
 OPTIMIZATION:
   BATCH_SIZE_PER_GPU: 4
