@@ -339,6 +339,180 @@ model(batch_dict)
 
 这是 WLR 下一步最值得先做的结构改变，因为它会统一后面所有链路的输入。
 
+#### 阶段 1 完成后，info 至少应该长什么样
+
+建议把“最低可用 schema”先收敛到下面这组字段，不要一开始就加太多花哨 meta：
+
+```python
+info = {
+    "point_cloud": {
+        "lidar_idx": "1802/000123",
+        "num_features": 4,
+    },
+    "image": {
+        "cam_frame_id": "000456",
+        "image_path": "000456.jpg",      # 相对 IMAGE_ROOT
+        "image_shape": [1080, 1920],     # [H, W]，没有就先写 null
+    },
+    "sync": {
+        "lidar_frame_id": "000123",
+        "cam_frame_id": "000456",
+        "source": "cam_lidar_match_canonical.csv",
+    },
+    "calib": {
+        "cam_K": ...,
+        "T_cam_from_lidar": ...,
+        "candidate_name": "native",      # 原始 info 建议写 native
+        "calib_source": "per_frame_npz", # 或 global_calib_npz / candidate_eval_info
+        "cam_k_source": "per_frame_npz", # 或 global_calib_npz / candidate
+    },
+    "annotations": {
+        ...
+    }
+}
+```
+
+字段约定建议明确成下面这样：
+
+| 字段 | 建议来源 | 为什么现在就要收进 info |
+| --- | --- | --- |
+| `image.cam_frame_id` | `frame_map_csv`；如果没有外部映射，就退化成与 lidar 同名 | B0/B1、可视化、YOLO 对齐都需要它 |
+| `image.image_path` | 相对 `IMAGE_ROOT` 的路径，例如 `000456.jpg` | 后处理和 dataset 不必再自己猜图像文件名 |
+| `image.image_shape` | 从真实图像读取；如果成本高，第一版可先写 `null` | 投影和审计时能避免重复读图拿尺寸 |
+| `sync.lidar_frame_id` | `lidar_idx` 去目录和后缀后的规范 id | 后处理统一按规范 key 对齐 |
+| `sync.cam_frame_id` | 同 `image.cam_frame_id` | 显式表达同步关系，而不是藏在文件名假设里 |
+| `sync.source` | 例如 `cam_lidar_match_canonical.csv` / `identity_sync_filename` | 后续审计能知道同步关系来自哪里 |
+| `calib.candidate_name` | 原始同步 info 写 `native`；候选评测 info 写 `baseline` / `top_01` 等 | 后处理和 paper table 直接知道当前跑的是哪套标定 |
+| `calib.calib_source` | `per_frame_npz` / `global_calib_npz` / `candidate_eval_info` | 后面排查投影误差时能快速知道标定口径 |
+| `calib.cam_k_source` | `per_frame_npz` / `global_calib_npz` / `candidate` | 区分外参与内参是不是来自同一路径 |
+
+这里最重要的原则是：
+
+- `cam_frame_id` 不再只存在于外部 `frame_map_csv`
+- `image_path` 不再只靠 `_find_image_path(key)` 猜
+- `candidate_name` 和 `calib_source` 不再只存在于文件名或命令行上下文
+
+#### 当前代码的真实缺口
+
+目前这三个入口文件其实已经能覆盖阶段 1 的绝大部分工作，但职责还没收拢：
+
+- [`tools/prepare_wlr733_sync_splits.py`](../tools/prepare_wlr733_sync_splits.py) 目前只负责生成 split，并把 `IMAGE_ROOT` 塞进 dataset config，然后直接调用 `generate_infos(split_name)`。
+- [`pcdet/datasets/wlr733/wlr733_dataset.py`](../pcdet/datasets/wlr733/wlr733_dataset.py) 里的 `generate_infos()` 当前只写了 `point_cloud` 和 `annotations`，没有把图像、同步、标定元信息写进去。
+- [`tools/prepare_wlr_candidate_eval_infos.py`](../tools/prepare_wlr_candidate_eval_infos.py) 里的 `clone_infos_with_calib()` 目前只覆盖 `calib.cam_K` 和 `calib.T_cam_from_lidar`，没有把 `candidate_name`、`calib_source`、`cam_k_source` 补齐。
+- [`tools/rescore_wlr_with_yolo.py`](../tools/rescore_wlr_with_yolo.py) 之所以还必须传 `--frame_map_csv` 和 `--image_dir`，本质上就是因为前面的 info schema 还不够完整。
+
+也就是说，阶段 1 不是要发明一套全新系统，而是把已经散落在脚本参数、文件名假设和外部 csv 里的信息，正式回收到 `info.pkl` 里。
+
+#### 文件级改造清单
+
+下面这份清单是按“改完就能直接开始减外部依赖”的顺序排列的。
+
+##### 1. 改 `pcdet/datasets/wlr733/wlr733_dataset.py`
+
+优先级最高，因为 `generate_infos()` 是所有 WLR info 的统一出口。
+
+建议直接修改这些现有函数：
+
+| 函数 | 建议修改内容 |
+| --- | --- |
+| `generate_infos()` | 这是阶段 1 的主改造点。除了 `point_cloud` / `annotations`，要补出 `image`、`sync`、`calib` 三个 block。 |
+| `_find_image_path()` | 先读 `info["image"]["image_path"]`，只有 legacy info 没这个字段时，才回退到按 `key + ext` 猜文件。 |
+| `_load_frame_calib()` | 继续优先读取 `info["calib"]`，但补充对 `candidate_name` / `calib_source` 的透传和兜底逻辑。 |
+| `__getitem__()` | 除了 `images` / `cam_K` / `T_cam_from_lidar`，建议把 `cam_frame_id`、`image_path`、`candidate_name`、`calib_source` 一起塞进 `input_dict`，方便 debug 和后处理。 |
+| `__init__()` | 当前“过滤没有匹配图像的样本”这一步只按 lidar id 猜图。阶段 1 后建议优先依赖 info 里的 `image.image_path`。 |
+
+`generate_infos()` 里建议实际补的内容：
+
+1. 规范化 `lidar_idx`，拆出 `lidar_frame_id`
+2. 查到对应的 `cam_frame_id`
+3. 根据 `cam_frame_id` 解析 `image_path`
+4. 如果能找到图像，就读取 `image_shape`
+5. 读取 per-frame calib 或 global calib，并写入 `calib_source`
+6. 对原始同步 info，统一写 `candidate_name="native"`
+
+为了让实现更干净，建议在这个文件里新增 2 到 4 个小 helper，而不是把所有逻辑都塞进 `generate_infos()`：
+
+- `_resolve_cam_frame_id(self, lidar_id, sync_map=None)`
+- `_resolve_info_image_path(self, cam_frame_id)`
+- `_build_sync_meta(self, lidar_frame_id, cam_frame_id, sync_source)`
+- `_build_calib_meta(self, sid)`
+
+这些 helper 不是必须的，但会显著降低 `generate_infos()` 继续失控变长的风险。
+
+##### 2. 改 `tools/prepare_wlr733_sync_splits.py`
+
+这个脚本当前最大的限制是：它生成了“同步 split”，但没有把“同步关系本身”写进 info。
+
+建议直接修改这些位置：
+
+| 位置 | 建议修改内容 |
+| --- | --- |
+| `main()` | 增加可选参数 `--frame_map_csv` 和 `--sync_source_name`。如果提供了 csv，就把 `lidar -> cam` 对应关系读进来。 |
+| `save_infos()` | 不再只裸调 `ds.generate_infos(split_name)`，而是把 `sync_map`、`sync_source_name` 一起传进去。 |
+
+建议新增一个轻量 helper：
+
+- `load_lidar_to_cam_map(csv_path: Path)`：逻辑可以直接参考 [`tools/rescore_wlr_with_yolo.py`](../tools/rescore_wlr_with_yolo.py) 里的同名思路
+
+这一改完成后，`train_sync` / `val_sync` / `test_sync` 生成出来的 info 就不只是“有同步图像的 split”，而是“显式记录了同步对应关系的 split”。
+
+##### 3. 改 `tools/prepare_wlr_candidate_eval_infos.py`
+
+这个脚本阶段 1 的任务不是“继续加新候选逻辑”，而是把候选口径补写到 schema 里。
+
+建议直接修改这些现有函数：
+
+| 函数 | 建议修改内容 |
+| --- | --- |
+| `clone_infos_with_calib()` | 不要只重写 `cam_K` 和 `T_cam_from_lidar`，要同时补上 `candidate_name`、`calib_source`、`cam_k_source`，并保留已有 `image` / `sync` block。 |
+| `main()` | 输出 summary 时把 `candidate_name`、`calib_source` 一并写进 summary row，方便后面对账。 |
+| `candidate_cam_k()` | 保持现有逻辑即可，但返回结果最终要体现在 `cam_k_source` 字段上。 |
+
+这里最关键的一点是：`clone_infos_with_calib()` 不应该把原始 info 退化成“只剩 calib 的壳”，它应该是“保留原始 frame meta，再覆盖当前候选 calib”。
+
+建议写出的口径：
+
+- 原始同步 info：`candidate_name="native"`
+- 候选 baseline：`candidate_name="baseline"`
+- top-k 候选：`candidate_name="top_01"` / `top_03` ...
+- `calib_source="candidate_eval_info"`
+- `cam_k_source="candidate"` 或 `global_calib_npz`
+
+##### 4. 阶段 1 完成后，再回头改 `tools/rescore_wlr_with_yolo.py`
+
+这一步不一定要和阶段 1 同一个 commit 做，但建议紧接着做兼容改造。
+
+优先读取顺序建议改成：
+
+1. 先从 `info["image"]["cam_frame_id"]` 读相机帧
+2. 再从 `info["image"]["image_path"]` 读图像路径
+3. 只有 legacy info 缺字段时，才回退到 `--frame_map_csv` 和 `--image_dir`
+
+这样做完以后，WLR-B0 才真正开始摆脱“外部 csv 驱动”的实验脚本状态。
+
+#### 推荐的最小实现顺序
+
+如果只想先做一版最小闭环，建议按下面顺序落地：
+
+1. 先改 `wlr733_dataset.py::generate_infos()`，确保新 info schema 能生成出来
+2. 再改 `prepare_wlr733_sync_splits.py`，让同步 split 的 info 真正带上 `cam_frame_id` / `sync.source`
+3. 再改 `prepare_wlr_candidate_eval_infos.py`，保证 candidate info 不会把前面的 meta 覆盖丢失
+4. 最后再让 `rescore_wlr_with_yolo.py` 优先消费新 schema
+
+这样每一步都是可验证的，不会陷入“大改一半但没有产物可用”的状态。
+
+#### 阶段 1 的验收标准
+
+只要满足下面这几条，就说明阶段 1 已经真正完成，而不是“多写了几个字段”：
+
+1. 随便打开一个新的 `wlr733_infos_*.pkl`，每帧都能看到 `image`、`sync`、`calib` 三个 block。
+2. `image.cam_frame_id` 和 `sync.cam_frame_id` 是一致的，不再需要额外猜。
+3. `calib.candidate_name` 和 `calib.calib_source` 能直接告诉你当前评测跑的是哪套标定口径。
+4. [`tools/rescore_wlr_with_yolo.py`](../tools/rescore_wlr_with_yolo.py) 在面对新 info 时，可以不依赖 `frame_map_csv` 完成大部分对齐。
+5. [`pcdet/datasets/wlr733/wlr733_dataset.py`](../pcdet/datasets/wlr733/wlr733_dataset.py) 的 `__getitem__()` 不再只能靠 lidar frame id 猜图像文件。
+
+这一步一旦做完，后面的 B0 / B1 模块化才有真正稳定的输入层。
+
 ### 阶段 2：WLR-B0 模块化
 
 优先修改：
