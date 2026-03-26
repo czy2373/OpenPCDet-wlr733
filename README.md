@@ -104,6 +104,7 @@ DAIR 主线常用配置：
 
 - [`TOOLS_PY_GUIDE.md`](TOOLS_PY_GUIDE.md)：`tools/**/*.py` 的用途总览
 - [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)：本地环境安装、扩展编译、验证和 GitHub 推送说明
+- [`docs/WLR_NEXT_ARCH.md`](docs/WLR_NEXT_ARCH.md)：WLR 主线下一步结构改造建议与分层路线图
 - [`docs/INSTALL.md`](docs/INSTALL.md)：上游 OpenPCDet 的安装说明
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)：上游 OpenPCDet 的入门说明
 
