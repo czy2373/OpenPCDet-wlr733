@@ -9,6 +9,7 @@ without overwriting the shared calib.npz on disk.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import pickle
 from pathlib import Path
@@ -18,6 +19,10 @@ import yaml
 from easydict import EasyDict
 
 from pcdet.datasets.wlr733.wlr733_dataset import WLR733Dataset
+try:
+    from prepare_wlr733_sync_splits import load_lidar_to_cam_map
+except ImportError:
+    from tools.prepare_wlr733_sync_splits import load_lidar_to_cam_map
 
 
 def parse_csv_spec(spec: str) -> list[str]:
@@ -116,17 +121,28 @@ def candidate_cam_k(candidate_row: dict, default_cam_k: np.ndarray) -> np.ndarra
     return np.asarray(default_cam_k, dtype=np.float32)
 
 
-def clone_infos_with_calib(infos: list[dict], cam_k: np.ndarray, t_cam_from_lidar: np.ndarray) -> list[dict]:
+def clone_infos_with_calib(
+    infos: list[dict],
+    cam_k: np.ndarray,
+    t_cam_from_lidar: np.ndarray,
+    *,
+    candidate_name: str,
+    calib_source: str,
+    cam_k_source: str,
+) -> list[dict]:
     cam_k = np.asarray(cam_k, dtype=np.float32)
     t_cam_from_lidar = np.asarray(t_cam_from_lidar, dtype=np.float32)
 
     out = []
     for info in infos:
-        row = dict(info)
-        row["calib"] = {
-            "cam_K": cam_k.copy(),
-            "T_cam_from_lidar": t_cam_from_lidar.copy(),
-        }
+        row = copy.deepcopy(info)
+        calib_meta = row.get("calib", {}) or {}
+        calib_meta["cam_K"] = cam_k.copy()
+        calib_meta["T_cam_from_lidar"] = t_cam_from_lidar.copy()
+        calib_meta["candidate_name"] = str(candidate_name)
+        calib_meta["calib_source"] = str(calib_source)
+        calib_meta["cam_k_source"] = str(cam_k_source)
+        row["calib"] = calib_meta
         out.append(row)
     return out
 
@@ -153,6 +169,8 @@ def main() -> None:
     ap.add_argument("--data_root", default="data/wlr733")
     ap.add_argument("--dataset_cfg", default="tools/cfgs/dataset_configs/wlr733_dataset_sync.yaml")
     ap.add_argument("--image_root", default="/root/pointpillar/cam_matched")
+    ap.add_argument("--frame_map_csv", default="", help="optional lidar_frame -> cam_frame mapping csv for base infos")
+    ap.add_argument("--sync_source_name", default="", help="optional sync source label written into base infos")
     ap.add_argument("--global_calib_npz", default="data/wlr733/training/calib/calib.npz")
     ap.add_argument("--local_refine_json", default="/root/pointpillar/wlr_extrinsic_local_refine_v1/T_best_local_by_metric.json")
     ap.add_argument("--splits", default="val_mid20,all_labeled_31")
@@ -187,6 +205,14 @@ def main() -> None:
         training=True,
         root_path=data_root,
     )
+    sync_map = None
+    sync_source = None
+    if args.frame_map_csv:
+        frame_map_csv = Path(args.frame_map_csv)
+        if not frame_map_csv.exists():
+            raise FileNotFoundError(frame_map_csv)
+        sync_map = load_lidar_to_cam_map(frame_map_csv)
+        sync_source = args.sync_source_name or frame_map_csv.name
 
     calib_data = np.load(str(args.global_calib_npz))
     cam_k = np.asarray(calib_data["K"], dtype=np.float32)
@@ -199,7 +225,7 @@ def main() -> None:
 
     summary_rows = []
     for split_name in split_names:
-        base_infos = ds.generate_infos(split_name)
+        base_infos = ds.generate_infos(split_name, sync_map=sync_map, sync_source=sync_source)
         for candidate_name in candidate_names:
             if candidate_name not in candidate_map:
                 raise KeyError(f"candidate not found in local refine json: {candidate_name}")
@@ -212,7 +238,14 @@ def main() -> None:
                 else "global_calib_npz"
             )
             t_cur = np.asarray(candidate_row["T_cam_from_lidar"], dtype=np.float32)
-            infos = clone_infos_with_calib(base_infos, cam_k=cam_k_cur, t_cam_from_lidar=t_cur)
+            infos = clone_infos_with_calib(
+                base_infos,
+                cam_k=cam_k_cur,
+                t_cam_from_lidar=t_cur,
+                candidate_name=candidate_name,
+                calib_source="candidate_eval_info",
+                cam_k_source=cam_k_source,
+            )
             out_path = out_dir / f"wlr733_infos_{split_name}_{candidate_name}.pkl"
             with open(out_path, "wb") as f:
                 pickle.dump(infos, f)
@@ -223,7 +256,9 @@ def main() -> None:
                     "split": split_name,
                     "candidate": candidate_name,
                     "info_pkl": str(out_path),
+                    "calib_source": "candidate_eval_info",
                     "cam_k_source": cam_k_source,
+                    "sync_source": sync_source,
                     "num_samples": int(len(infos)),
                     "frames_with_gt": int(frames_with_gt),
                     "total_gt_boxes": int(total_boxes),
@@ -235,7 +270,9 @@ def main() -> None:
                         "split": split_name,
                         "candidate": candidate_name,
                         "info_pkl": str(out_path),
+                        "calib_source": "candidate_eval_info",
                         "cam_k_source": cam_k_source,
+                        "sync_source": sync_source,
                         "num_samples": int(len(infos)),
                         "frames_with_gt": int(frames_with_gt),
                         "total_gt_boxes": int(total_boxes),
@@ -247,6 +284,8 @@ def main() -> None:
     summary = {
         "dataset_cfg": str(dataset_cfg_path),
         "image_root": str(args.image_root),
+        "frame_map_csv": str(args.frame_map_csv),
+        "sync_source": sync_source,
         "global_calib_npz": str(args.global_calib_npz),
         "local_refine_json": str(args.local_refine_json),
         "rows": summary_rows,

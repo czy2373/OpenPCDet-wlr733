@@ -10,11 +10,15 @@ import csv
 import json
 import pickle
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
 
-import rescore_dair_with_yolo as b0
+try:
+    import rescore_dair_with_yolo as b0
+except ImportError:
+    from tools import rescore_dair_with_yolo as b0
 
 
 def load_wlr_info_map(info_pkl: Path):
@@ -27,8 +31,14 @@ def load_wlr_info_map(info_pkl: Path):
         key = b0.norm_frame_id(lidar_id)
         ann = info.get("annotations", {}) or {}
         calib = info.get("calib", {}) or {}
+        image_meta = info.get("image", {}) or {}
+        sync_meta = info.get("sync", {}) or {}
         out[key] = {
             "lidar_frame_id": lidar_id,
+            "cam_frame_id": b0.stem_frame_id(
+                image_meta.get("cam_frame_id", sync_meta.get("cam_frame_id", lidar_id))
+            ),
+            "image_path": image_meta.get("image_path", None),
             "gt_boxes": np.asarray(
                 ann.get("gt_boxes_lidar", np.zeros((0, 7), dtype=np.float32)),
                 dtype=np.float32,
@@ -123,12 +133,33 @@ def load_lidar_to_cam_map(csv_path: Path):
     return out
 
 
+def resolve_wlr_image_path(image_dir: Optional[Path], meta: dict, fallback_frame_id: str) -> Path:
+    image_path_raw = meta.get("image_path", None)
+    if image_path_raw not in (None, ""):
+        image_path = Path(str(image_path_raw))
+        if image_path.is_absolute() and image_path.exists():
+            return image_path
+        if image_dir is not None:
+            candidate = image_dir / image_path
+            if candidate.exists():
+                return candidate
+        if image_path.exists():
+            return image_path
+
+    if image_dir is not None:
+        return b0.resolve_image_file(image_dir, meta.get("cam_frame_id", fallback_frame_id))
+
+    raise FileNotFoundError(
+        f"image_path missing for frame_id={fallback_frame_id}; provide --image_dir or write absolute image_path into info.pkl"
+    )
+
+
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--result_pkl", required=True, help="raw WLR result.pkl from tools/test.py")
     ap.add_argument("--info_pkl", required=True, help="WLR infos pkl with GT and calib")
-    ap.add_argument("--image_dir", required=True, help="matched camera image directory")
-    ap.add_argument("--frame_map_csv", required=True, help="lidar_frame -> cam_frame mapping csv")
+    ap.add_argument("--image_dir", default="", help="camera image directory; optional if info.pkl stores absolute image_path")
+    ap.add_argument("--frame_map_csv", default="", help="legacy fallback lidar_frame -> cam_frame mapping csv")
     ap.add_argument("--yolo_csv", required=True, help="YOLO detection CSV on camera frames")
     ap.add_argument("--output_dir", required=True)
     ap.add_argument("--yolo_classes", default="2,5,7", help="vehicle-like COCO ids to keep")
@@ -149,8 +180,8 @@ def main():
     args = parse_args()
     result_pkl = Path(args.result_pkl)
     info_pkl = Path(args.info_pkl)
-    image_dir = Path(args.image_dir)
-    frame_map_csv = Path(args.frame_map_csv)
+    image_dir = Path(args.image_dir) if args.image_dir else None
+    frame_map_csv = Path(args.frame_map_csv) if args.frame_map_csv else None
     yolo_csv = Path(args.yolo_csv)
     output_dir = Path(args.output_dir)
     vis_dir = output_dir / "visualizations"
@@ -161,7 +192,7 @@ def main():
     raw_result_list = b0.load_result_list(result_pkl)
     info_map = load_wlr_info_map(info_pkl)
     gt_map = load_gt_map_from_info_map(info_map)
-    lidar_to_cam_map = load_lidar_to_cam_map(frame_map_csv)
+    lidar_to_cam_map = load_lidar_to_cam_map(frame_map_csv) if frame_map_csv is not None else {}
     yolo_map = b0.load_yolo_map(yolo_csv, keep_classes=keep_classes)
 
     audit_rows = []
@@ -173,13 +204,18 @@ def main():
         lidar_key = b0.norm_frame_id(lidar_frame_id)
         if lidar_key not in info_map:
             raise KeyError(f"lidar frame {lidar_frame_id} missing from info_pkl")
-        if lidar_key not in lidar_to_cam_map:
-            raise KeyError(f"lidar frame {lidar_frame_id} missing from frame_map_csv")
 
-        cam_frame_id = lidar_to_cam_map[lidar_key]
-        cam_key = b0.norm_frame_id(cam_frame_id)
         meta = info_map[lidar_key]
-        image_path = b0.resolve_image_file(image_dir, cam_frame_id)
+        cam_frame_id = meta.get("cam_frame_id", "")
+        if cam_frame_id in (None, "") and lidar_key in lidar_to_cam_map:
+            cam_frame_id = lidar_to_cam_map[lidar_key]
+        if cam_frame_id in (None, ""):
+            raise KeyError(
+                f"lidar frame {lidar_frame_id} missing cam_frame_id in info_pkl and no usable frame_map_csv was provided"
+            )
+
+        cam_key = b0.norm_frame_id(cam_frame_id)
+        image_path = resolve_wlr_image_path(image_dir, meta, fallback_frame_id=cam_frame_id)
         image = cv2.imread(str(image_path))
         if image is None:
             raise FileNotFoundError(image_path)
