@@ -101,6 +101,26 @@ class WLR733Dataset(DatasetTemplate):
         sid = sid.split('.')[0]
         return sid
 
+    @staticmethod
+    def _canonical_frame_id(sid: str):
+        key = WLR733Dataset._norm_key(sid)
+        if key.isdigit():
+            return f'{int(key):06d}'
+        return key
+
+    @staticmethod
+    def _frame_id_variants(sid: str):
+        key = WLR733Dataset._norm_key(sid)
+        out = []
+        for candidate in (
+            key,
+            str(int(key)) if key.isdigit() else key,
+            f'{int(key):06d}' if key.isdigit() else key,
+        ):
+            if candidate not in out:
+                out.append(candidate)
+        return out
+
     def _rebuild_info_index(self):
         self.info_by_id = {}
         for info in self.infos:
@@ -147,15 +167,16 @@ class WLR733Dataset(DatasetTemplate):
             sync_meta = info.get('sync', {}) or {}
             for candidate in (image_meta.get('cam_frame_id', None), sync_meta.get('cam_frame_id', None)):
                 if candidate not in (None, ''):
-                    return self._norm_key(candidate)
+                    return self._canonical_frame_id(candidate)
 
         key = self._norm_key(sid)
         if sync_map is not None:
-            mapped = sync_map.get(key, None)
-            if mapped not in (None, ''):
-                return self._norm_key(mapped)
+            for candidate_key in self._frame_id_variants(key):
+                mapped = sync_map.get(candidate_key, None)
+                if mapped not in (None, ''):
+                    return self._canonical_frame_id(mapped)
 
-        return key
+        return self._canonical_frame_id(key)
 
     def _resolve_image_candidate(self, image_path_like):
         if image_path_like in (None, ''):
@@ -181,6 +202,16 @@ class WLR733Dataset(DatasetTemplate):
 
         return abs_path.as_posix()
 
+    def _candidate_image_keys(self, sid: str, cam_frame_id=None):
+        keys = []
+        for candidate in (cam_frame_id, sid):
+            if candidate in (None, ''):
+                continue
+            for key in self._frame_id_variants(candidate):
+                if key not in keys:
+                    keys.append(key)
+        return keys
+
     def _resolve_info_image_path(self, sid: str, info=None, cam_frame_id=None):
         info = self._get_info(sid) if info is None else info
         cam_frame_id = self._resolve_cam_frame_id(sid, info=info) if cam_frame_id is None else self._norm_key(cam_frame_id)
@@ -192,12 +223,13 @@ class WLR733Dataset(DatasetTemplate):
             if abs_path is not None and abs_path.exists():
                 return self._normalize_image_path_for_info(image_path_raw, abs_path), abs_path
 
-        if self.image_root is not None and cam_frame_id not in (None, ''):
-            for ext in self.image_exts:
-                rel_path = f'{cam_frame_id}{ext}'
-                abs_path = self.image_root / rel_path
-                if abs_path.exists():
-                    return rel_path, abs_path
+        if self.image_root is not None:
+            for image_key in self._candidate_image_keys(sid, cam_frame_id=cam_frame_id):
+                for ext in self.image_exts:
+                    rel_path = f'{image_key}{ext}'
+                    abs_path = self.image_root / rel_path
+                    if abs_path.exists():
+                        return rel_path, abs_path
 
         if image_path_raw not in (None, ''):
             return Path(str(image_path_raw)).as_posix(), self._resolve_image_candidate(image_path_raw)
