@@ -51,27 +51,6 @@ class WLR733Dataset(DatasetTemplate):
             self.cam_K = None
             self.T_cam_from_lidar = None
 
-        # ===== Filter frames without matched images =====
-        if self.image_root.exists():
-            def _key6(sid: str) -> str:
-                sid = str(sid).strip()
-                sid = sid.split('/')[-1].split('\\')[-1]
-                sid = sid.split('.')[0]
-                return sid
-
-            old_n = len(self.sample_id_list)
-            old_ids = list(self.sample_id_list)
-            valid = []
-            for sid in self.sample_id_list:
-                key = _key6(sid)
-                if (self.image_root / f'{key}.jpg').exists() or (self.image_root / f'{key}.png').exists():
-                    valid.append(sid)
-            self.sample_id_list = valid
-            msg = f'[WLR733Dataset] keep {len(valid)}/{old_n} samples with images under {self.image_root}'
-            if old_n > 0 and len(valid) == 0:
-                msg += f'; first_ids={old_ids[:5]}'
-            (logger.info(msg) if logger is not None else print(msg))
-
         # ===== Load infos =====
         self.infos = []
         info_cfg = getattr(dataset_cfg, 'INFO_PATH', None) or dataset_cfg.get('INFO_PATH', None)
@@ -94,28 +73,41 @@ class WLR733Dataset(DatasetTemplate):
             raise RuntimeError('No infos loaded for test split; check DATA_CONFIG.INFO_PATH.test in your yaml.')
 
         self.info_by_id = {}
-        for info in self.infos:
-            sid = info.get('point_cloud', {}).get('lidar_idx', info.get('frame_id', ''))
-            sid = self._norm_key(sid)
-            if sid:
-                self.info_by_id[sid] = info
+        self._rebuild_info_index()
+
+        # ===== Filter frames without matched images =====
+        if self.image_root.exists():
+            old_n = len(self.sample_id_list)
+            old_ids = list(self.sample_id_list)
+            valid = []
+            for sid in self.sample_id_list:
+                if self._find_image_path(sid) is not None:
+                    valid.append(sid)
+            self.sample_id_list = valid
+            msg = f'[WLR733Dataset] keep {len(valid)}/{old_n} samples with images under {self.image_root}'
+            if old_n > 0 and len(valid) == 0:
+                msg += f'; first_ids={old_ids[:5]}'
+            (logger.info(msg) if logger is not None else print(msg))
 
 
     # ====== 用下面这个替换你类里的 _find_image_path ======
-    def _find_image_path(self, key6: str):
-        if self.image_root is None:
-            return None
-        for ext in self.image_exts:
-            p = self.image_root / f'{key6}{ext}'
-            if p.exists():
-                return p
-        return None
+    def _find_image_path(self, sid: str):
+        _, image_path = self._resolve_info_image_path(sid)
+        return image_path
 
     @staticmethod
     def _norm_key(sid: str):
         sid = str(sid).strip().split('/')[-1].split('\\')[-1]
         sid = sid.split('.')[0]
         return sid
+
+    def _rebuild_info_index(self):
+        self.info_by_id = {}
+        for info in self.infos:
+            sid = info.get('point_cloud', {}).get('lidar_idx', info.get('frame_id', ''))
+            sid = self._norm_key(sid)
+            if sid:
+                self.info_by_id[sid] = info
 
     @staticmethod
     def _resolve_dataset_path(path_like):
@@ -148,12 +140,139 @@ class WLR733Dataset(DatasetTemplate):
     def _get_info(self, sid: str):
         return self.info_by_id.get(self._norm_key(sid), None)
 
+    def _resolve_cam_frame_id(self, sid: str, info=None, sync_map=None):
+        info = self._get_info(sid) if info is None else info
+        if info is not None:
+            image_meta = info.get('image', {}) or {}
+            sync_meta = info.get('sync', {}) or {}
+            for candidate in (image_meta.get('cam_frame_id', None), sync_meta.get('cam_frame_id', None)):
+                if candidate not in (None, ''):
+                    return self._norm_key(candidate)
+
+        key = self._norm_key(sid)
+        if sync_map is not None:
+            mapped = sync_map.get(key, None)
+            if mapped not in (None, ''):
+                return self._norm_key(mapped)
+
+        return key
+
+    def _resolve_image_candidate(self, image_path_like):
+        if image_path_like in (None, ''):
+            return None
+
+        image_path = Path(str(image_path_like))
+        if image_path.is_absolute():
+            return image_path
+        if self.image_root is None:
+            return None
+        return self.image_root / image_path
+
+    def _normalize_image_path_for_info(self, image_path_like, abs_path: Path):
+        image_path = Path(str(image_path_like))
+        if not image_path.is_absolute():
+            return image_path.as_posix()
+
+        if self.image_root is not None:
+            try:
+                return abs_path.relative_to(self.image_root).as_posix()
+            except ValueError:
+                pass
+
+        return abs_path.as_posix()
+
+    def _resolve_info_image_path(self, sid: str, info=None, cam_frame_id=None):
+        info = self._get_info(sid) if info is None else info
+        cam_frame_id = self._resolve_cam_frame_id(sid, info=info) if cam_frame_id is None else self._norm_key(cam_frame_id)
+
+        image_meta = info.get('image', {}) if info is not None else {}
+        image_path_raw = image_meta.get('image_path', None)
+        if image_path_raw not in (None, ''):
+            abs_path = self._resolve_image_candidate(image_path_raw)
+            if abs_path is not None and abs_path.exists():
+                return self._normalize_image_path_for_info(image_path_raw, abs_path), abs_path
+
+        if self.image_root is not None and cam_frame_id not in (None, ''):
+            for ext in self.image_exts:
+                rel_path = f'{cam_frame_id}{ext}'
+                abs_path = self.image_root / rel_path
+                if abs_path.exists():
+                    return rel_path, abs_path
+
+        if image_path_raw not in (None, ''):
+            return Path(str(image_path_raw)).as_posix(), self._resolve_image_candidate(image_path_raw)
+
+        return None, None
+
+    @staticmethod
+    def _load_image_shape(img_path: Path):
+        if img_path is None or (not img_path.exists()):
+            return None
+
+        img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+
+        h, w = img.shape[:2]
+        return [int(h), int(w)]
+
+    def _build_sync_meta(self, lidar_frame_id: str, cam_frame_id: str, sync_source=None):
+        if sync_source not in (None, ''):
+            source = str(sync_source)
+        elif cam_frame_id == lidar_frame_id:
+            source = 'identity_sync_filename'
+        else:
+            source = 'external_sync_map'
+
+        return {
+            'lidar_frame_id': str(lidar_frame_id),
+            'cam_frame_id': str(cam_frame_id),
+            'source': source,
+        }
+
+    def _build_calib_meta(self, sid: str):
+        key = self._norm_key(sid)
+        calib_meta = {
+            'candidate_name': 'native',
+        }
+
+        calib_file = self.root_path / 'training' / 'calib' / f'{key}.npz'
+        if calib_file.exists():
+            calib = np.load(str(calib_file))
+            calib_meta.update({
+                'cam_K': calib['K'].astype(np.float32),
+                'T_cam_from_lidar': calib['T_cam_from_lidar'].astype(np.float32),
+                'calib_source': 'per_frame_npz',
+                'cam_k_source': 'per_frame_npz',
+            })
+            return calib_meta
+
+        if self.cam_K is not None:
+            calib_meta['cam_K'] = self.cam_K.astype(np.float32).copy()
+        if self.T_cam_from_lidar is not None:
+            calib_meta['T_cam_from_lidar'] = self.T_cam_from_lidar.astype(np.float32).copy()
+        if ('cam_K' in calib_meta) or ('T_cam_from_lidar' in calib_meta):
+            calib_meta.update({
+                'calib_source': 'global_calib_npz',
+                'cam_k_source': 'global_calib_npz',
+            })
+        else:
+            calib_meta.update({
+                'calib_source': 'missing',
+                'cam_k_source': 'missing',
+            })
+
+        return calib_meta
+
     def _load_frame_calib(self, sid: str):
         info = self._get_info(sid)
         if info is not None:
             calib = info.get('calib', None)
-            if calib is not None and ('cam_K' in calib) and ('T_cam_from_lidar' in calib):
-                return np.asarray(calib['cam_K'], dtype=np.float32), np.asarray(calib['T_cam_from_lidar'], dtype=np.float32)
+            if calib is not None:
+                cam_k = calib.get('cam_K', None)
+                t_cam_from_lidar = calib.get('T_cam_from_lidar', None)
+                if cam_k is not None and t_cam_from_lidar is not None:
+                    return np.asarray(cam_k, dtype=np.float32), np.asarray(t_cam_from_lidar, dtype=np.float32)
 
         key = self._norm_key(sid)
         calib_file = self.root_path / 'training' / 'calib' / f'{key}.npz'
@@ -186,18 +305,16 @@ class WLR733Dataset(DatasetTemplate):
         idx = self.sample_id_list[index]
         points = self.get_lidar(idx)
         annos = self.get_label(idx)
+        info = self._get_info(idx)
 
         input_dict = {
             'frame_id': idx,
             'points': points,
         }
 
-        # frame_id 可能是 '1802/000003'，统一取最后 6 位
-        key = str(idx).strip().split('/')[-1].split('\\')[-1].split('.')[0]
-
         H_fix, W_fix = self.image_resize_hw  # (1080,1920)
-        img_path = self._find_image_path(key)
-        cam_K_frame, T_cam_from_lidar_frame = self._load_frame_calib(key)
+        img_path = self._find_image_path(idx)
+        cam_K_frame, T_cam_from_lidar_frame = self._load_frame_calib(idx)
 
         if img_path is not None:
             img, H_img, W_img = self._read_image_chw_float(img_path, (H_fix, W_fix))
@@ -226,6 +343,18 @@ class WLR733Dataset(DatasetTemplate):
                 input_dict['cam_K'] = cam_K_frame.astype(np.float32)
             if T_cam_from_lidar_frame is not None:
                 input_dict['T_cam_from_lidar'] = T_cam_from_lidar_frame.astype(np.float32)
+
+        if info is not None:
+            image_meta = info.get('image', {}) or {}
+            sync_meta = info.get('sync', {}) or {}
+            calib_meta = info.get('calib', {}) or {}
+            input_dict['image_paths'] = np.array(image_meta.get('image_path', '') or '', dtype=np.str_)
+            input_dict['cam_frame_id'] = np.array(
+                image_meta.get('cam_frame_id', sync_meta.get('cam_frame_id', '')) or '',
+                dtype=np.str_,
+            )
+            input_dict['candidate_name'] = np.array(calib_meta.get('candidate_name', '') or '', dtype=np.str_)
+            input_dict['calib_source'] = np.array(calib_meta.get('calib_source', '') or '', dtype=np.str_)
 
         if len(annos) > 0:
             gt_boxes = annos[:, :7].astype(np.float32)
@@ -352,13 +481,34 @@ class WLR733Dataset(DatasetTemplate):
     
 
 
-    def generate_infos(self, split='train'):
+    def generate_infos(self, split='train', sync_map=None, sync_source=None):
         split_dir = self.root_path / 'ImageSets' / f'{split}.txt'
         sample_ids = [x.strip() for x in open(split_dir).readlines()]
+        sync_lookup = None
+        if sync_map is not None:
+            sync_lookup = {self._norm_key(k): v for k, v in sync_map.items()}
+
         infos = []
         for idx in tqdm.tqdm(sample_ids, desc=f'Generate infos ({split})'):
+            lidar_frame_id = self._norm_key(idx)
+            cam_frame_id = self._resolve_cam_frame_id(idx, sync_map=sync_lookup)
+            image_rel_path, image_abs_path = self._resolve_info_image_path(
+                idx, info=None, cam_frame_id=cam_frame_id
+            )
             info = {
+                'frame_id': idx,
                 'point_cloud': {'num_features': 4, 'lidar_idx': idx},
+                'image': {
+                    'cam_frame_id': cam_frame_id,
+                    'image_path': image_rel_path,
+                    'image_shape': self._load_image_shape(image_abs_path),
+                },
+                'sync': self._build_sync_meta(
+                    lidar_frame_id=lidar_frame_id,
+                    cam_frame_id=cam_frame_id,
+                    sync_source=sync_source,
+                ),
+                'calib': self._build_calib_meta(idx),
                 'annotations': {}
             }
             annos = self.get_label(idx)
@@ -367,6 +517,7 @@ class WLR733Dataset(DatasetTemplate):
                 info['annotations']['gt_boxes_lidar'] = annos[:, :7]
             infos.append(info)
         self.infos = infos
+        self._rebuild_info_index()
         return infos
 
     def create_custom_infos(self):

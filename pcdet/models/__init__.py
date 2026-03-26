@@ -27,7 +27,7 @@ def load_data_to_gpu(batch_dict):
             batch_dict[key] = val.to(device)
         elif not isinstance(val, np.ndarray):
             continue
-        elif key in ['frame_id', 'metadata', 'calib', 'image_paths','ori_shape','img_process_infos']:
+        elif key in ['frame_id', 'metadata', 'calib', 'image_paths', 'cam_frame_id', 'candidate_name', 'calib_source', 'ori_shape', 'img_process_infos']:
             continue
         elif key in ['images']:
             if kornia is not None:
